@@ -27,9 +27,11 @@ from django.utils.safestring import mark_safe
 
 from .models import Attribute, Value, EnumValue, EnumGroup
 
+
 class BaseEntityAdmin(ModelAdmin):
 
-    def render_change_form(self, request, context, add=False, change=False, form_url='', obj=None):
+    def render_change_form(self, request, context, add=False, change=False,
+                           form_url='', obj=None):
         """
         Wrapper for ModelAdmin.render_change_form. Replaces standard static
         AdminForm with an EAV-friendly one. The point is that our form generates
@@ -41,9 +43,10 @@ class BaseEntityAdmin(ModelAdmin):
         form = context['adminform'].form
 
         # infer correct data from the form
-        fieldsets = self.fieldsets or [(None, {'fields': list(form.fields.keys())})]
+        fieldsets = self.fieldsets or [
+            (None, {'fields': list(form.fields.keys())})]
         adminform = admin.helpers.AdminForm(form, fieldsets,
-                                      self.prepopulated_fields)
+                                            self.prepopulated_fields)
         media = mark_safe(self.media + adminform.media)
 
         context.update(adminform=adminform, media=media)
@@ -56,6 +59,7 @@ class BaseEntityInlineFormSet(BaseInlineFormSet):
     """
     An inline formset that correctly initializes EAV forms.
     """
+
     def add_fields(self, form, index):
         if self.instance:
             setattr(form.instance, self.fk.name, self.instance)
@@ -93,13 +97,14 @@ class BaseEntityInline(InlineModelAdmin):
 
         return [(None, {'fields': list(form.fields.keys())})]
 
+
 class AttributeAdmin(ModelAdmin):
-    list_display = ('name', 'content_type', 'slug', 'datatype', 'description', 'site')
-    list_filter = ['site']
+    list_display = ('name', 'content_type', 'slug', 'datatype', 'description',
+                    'ldap_attribute_name')
     prepopulated_fields = {'slug': ('name',)}
+
 
 admin.site.register(Attribute, AttributeAdmin)
 admin.site.register(Value)
 admin.site.register(EnumValue)
 admin.site.register(EnumGroup)
-

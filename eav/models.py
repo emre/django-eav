@@ -36,14 +36,9 @@ from __future__ import unicode_literals
 from builtins import object
 
 
-from django.utils import timezone
-from django.db import models
-from django.core.exceptions import ValidationError
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes import fields as generic
-from django.contrib.sites.models import Site
-from django.contrib.sites.managers import CurrentSiteManager
 from django.conf import settings
 from django.utils.encoding import python_2_unicode_compatible
 
@@ -86,6 +81,9 @@ class EnumValue(models.Model):
     @python_2_unicode_compatible
     def __str__(self):
         return self.value
+
+    class Meta:
+        db_table = "enum_values"
        
 
 class EnumGroup(models.Model):
@@ -104,6 +102,9 @@ class EnumGroup(models.Model):
     @python_2_unicode_compatible
     def __str__(self):
         return self.name
+
+    class Meta:
+        db_table = "enum_groups"
 
 
 class Attribute(models.Model):
@@ -158,7 +159,7 @@ class Attribute(models.Model):
 
     class Meta(object):
         ordering = ['content_type', 'name']
-        unique_together = ('site', 'content_type', 'slug')
+        unique_together = ('content_type', 'slug')
 
     TYPE_TEXT = 'text'
     TYPE_FLOAT = 'float'
@@ -181,12 +182,13 @@ class Attribute(models.Model):
     name = models.CharField(_(u"name"), max_length=100,
                             help_text=_(u"User-friendly attribute name"))
 
+    ldap_attribute_name = models.CharField(
+        max_length=255, blank=True, null=True)
+
     content_type = models.ForeignKey(ContentType,
                             blank=True, null=True,
-                            verbose_name=_(u"content type"))
-
-    site = models.ForeignKey(Site, verbose_name=_(u"site"),
-                             default=settings.SITE_ID)
+                            verbose_name=_(u"content type"),
+                                     on_delete=models.DO_NOTHING)
 
     slug = EavSlugField(_(u"slug"), max_length=50, db_index=True,
                           help_text=_(u"Short unique attribute label"))
@@ -196,7 +198,7 @@ class Attribute(models.Model):
                                      help_text=_(u"Short description"))
 
     enum_group = models.ForeignKey(EnumGroup, verbose_name=_(u"choice group"),
-                                   blank=True, null=True)
+                                   blank=True, null=True, on_delete=models.DO_NOTHING)
 
     type = models.CharField(_(u"type"), max_length=20, blank=True, null=True)
 
@@ -217,7 +219,6 @@ class Attribute(models.Model):
     display_order = models.PositiveIntegerField(_(u"display order"), default=1)
 
     objects = models.Manager()
-    on_site = CurrentSiteManager()
 
     def get_validators(self):
         '''
@@ -324,7 +325,10 @@ class Attribute(models.Model):
 
     @python_2_unicode_compatible
     def __str__(self):
-        return u"%s.%s (%s)" % (self.content_type, self.name, self.get_datatype_display())
+        return u"%s (%s)" % (self.name, self.get_datatype_display())
+
+    class Meta:
+        db_table = "attributes"
 
 
 class Value(models.Model):
@@ -347,7 +351,8 @@ class Value(models.Model):
     <Value: crazy_dev_user - Favorite Drink: "red bull">
     '''
 
-    entity_ct = models.ForeignKey(ContentType, related_name='value_entities')
+    entity_ct = models.ForeignKey(ContentType, related_name='value_entities',
+                                  on_delete=models.DO_NOTHING)
     entity_id = models.IntegerField()
     entity = generic.GenericForeignKey(ct_field='entity_ct',
                                        fk_field='entity_id')
@@ -358,11 +363,13 @@ class Value(models.Model):
     value_date = models.DateTimeField(blank=True, null=True)
     value_bool = models.NullBooleanField(blank=True, null=True)
     value_enum = models.ForeignKey(EnumValue, blank=True, null=True,
-                                   related_name='eav_values')
+                                   related_name='eav_values',
+                                   on_delete=models.DO_NOTHING)
 
     generic_value_id = models.IntegerField(blank=True, null=True)
     generic_value_ct = models.ForeignKey(ContentType, blank=True, null=True,
-                                         related_name='value_values')
+                                         related_name='value_values',
+                                         on_delete=models.DO_NOTHING)
     value_object = generic.GenericForeignKey(ct_field='generic_value_ct',
                                              fk_field='generic_value_id')
 
@@ -370,7 +377,8 @@ class Value(models.Model):
     modified = models.DateTimeField(_(u"modified"), auto_now=True)
 
     attribute = models.ForeignKey(Attribute, db_index=True,
-                                  verbose_name=_(u"attribute"))
+                                  verbose_name=_(u"attribute"),
+                                  on_delete=models.DO_NOTHING)
 
     def save(self, *args, **kwargs):
         '''
@@ -392,6 +400,10 @@ class Value(models.Model):
                                         {'choice': self.value_enum,
                                          'attribute': self.attribute})
 
+    @property
+    def given_value(self):
+        return self._get_value
+
     def _get_value(self):
         '''
         Return the python object this value is holding
@@ -410,6 +422,9 @@ class Value(models.Model):
     def __str__(self):
         return u"%s - %s: \"%s\"" % (self.entity, self.attribute.name,
                                      self.value)
+
+    class Meta:
+        db_table = "attribute_values"
 
 
 class Entity(object):
@@ -490,25 +505,25 @@ class Entity(object):
         '''
         values_dict = self.get_values_dict()
 
-        for attribute in self.get_all_attributes():
-            value = None
-            if self._hasattr(attribute.slug):
-                value = self._getattr(attribute.slug)
-            else:
-                value = values_dict.get(attribute.slug, None)
+        # for attribute in self.get_all_attributes():
+        #     value = None
+        #     if self._hasattr(attribute.slug):
+        #         value = self._getattr(attribute.slug)
+        #     else:
+        #         value = values_dict.get(attribute.slug, None)
 
-            if value is None:
-                if attribute.required:
-                    raise ValidationError(_(u"%(attr)s EAV field cannot " \
-                                                u"be blank") % \
-                                              {'attr': attribute.slug})
-            else:
-                try:
-                    attribute.validate_value(value)
-                except ValidationError as e:
-                    raise ValidationError(_(u"%(attr)s EAV field %(err)s") % \
-                                              {'attr': attribute.slug,
-                                               'err': e})
+            # if value is None:
+            #     if attribute.required:
+            #         raise ValidationError(_(u"%(attr)s EAV field cannot " \
+            #                                     u"be blank") % \
+            #                                   {'attr': attribute.slug})
+            # else:
+            # try:
+            #     attribute.validate_value(value)
+            # except ValidationError as e:
+            #     raise ValidationError(_(u"%(attr)s EAV field %(err)s") % \
+            #                               {'attr': attribute.slug,
+            #                                'err': e})
 
     def get_values_dict(self):
         values_dict = dict()
